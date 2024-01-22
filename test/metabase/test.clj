@@ -37,9 +37,10 @@
    [metabase.test.util.i18n :as i18n.tu]
    [metabase.test.util.log :as tu.log]
    [metabase.test.util.misc :as tu.misc]
-   [metabase.test.util.random :as tu.random]
+   [metabase.test.util.public-settings :as tu.public-setings]
    [metabase.test.util.thread-local :as tu.thread-local]
    [metabase.test.util.timezone :as test.tz]
+   [metabase.util.random :as u.random]
    [pjstadig.humane-test-output :as humane-test-output]
    [potemkin :as p]
    [toucan2.tools.with-temp :as t2.with-temp]))
@@ -82,8 +83,9 @@
   tu.async/keep-me
   tu.log/keep-me
   tu.misc/keep-me
-  tu.random/keep-me
+  tu.public-setings/keep-me
   tu.thread-local/keep-me
+  u.random/keep-me
   tu/keep-me
   tx.env/keep-me
   tx/keep-me)
@@ -266,7 +268,11 @@
   with-clock
   with-single-admin-user]
 
- [tu.random
+ [tu.public-setings
+  with-premium-features
+  with-additional-premium-features]
+
+ [u.random
   random-name
   random-hash
   random-email]
@@ -303,6 +309,7 @@
 
 ;; Rename this instead of using `import-vars` to make it clear that it's related to `=?`
 (p/import-fn hawk.approx/malli malli=?)
+(p/import-fn hawk.approx/exactly exactly=?)
 
 (alter-meta! #'with-temp update :doc str "\n\n  Note: by default, this will execute its body inside a transaction, making
   it thread safe. If it is wrapped in a call to [[metabase.test/test-helpers-set-global-values!]], it will affect the
