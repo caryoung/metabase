@@ -10,8 +10,8 @@ import {
 
 import PopoverWithTrigger from "metabase/components/PopoverWithTrigger";
 import { Icon } from "metabase/ui";
-import DateSingleWidget from "metabase/components/DateSingleWidget";
-import DateRangeWidget from "metabase/components/DateRangeWidget";
+import { DateSingleWidget } from "metabase/components/DateSingleWidget";
+import { DateRangeWidget } from "metabase/components/DateRangeWidget";
 import DateRelativeWidget from "metabase/components/DateRelativeWidget";
 import DateMonthYearWidget from "metabase/components/DateMonthYearWidget";
 import DateQuarterYearWidget from "metabase/components/DateQuarterYearWidget";
@@ -19,8 +19,8 @@ import { DateAllOptionsWidget } from "metabase/components/DateAllOptionsWidget";
 import { TextWidget } from "metabase/components/TextWidget";
 import { WidgetStatusIcon } from "metabase/parameters/components/WidgetStatusIcon";
 import FormattedParameterValue from "metabase/parameters/components/FormattedParameterValue";
-import NumberInputWidget from "metabase/parameters/components/widgets/NumberInputWidget";
-import StringInputWidget from "metabase/parameters/components/widgets/StringInputWidget";
+import { NumberInputWidget } from "metabase/parameters/components/widgets/NumberInputWidget";
+import { StringInputWidget } from "metabase/parameters/components/widgets/StringInputWidget";
 import {
   getNumberParameterArity,
   getStringParameterArity,
@@ -31,18 +31,9 @@ import {
   isNumberParameter,
 } from "metabase-lib/parameters/utils/parameter-type";
 import { hasFields } from "metabase-lib/parameters/utils/parameter-fields";
-
+import { areParameterValuesIdentical } from "metabase-lib/parameters/utils/parameter-values";
 import ParameterFieldWidget from "./widgets/ParameterFieldWidget/ParameterFieldWidget";
 import S from "./ParameterValueWidget.css";
-
-const DATE_WIDGETS = {
-  "date/single": DateSingleWidget,
-  "date/range": DateRangeWidget,
-  "date/relative": DateRelativeWidget,
-  "date/month-year": DateMonthYearWidget,
-  "date/quarter-year": DateQuarterYearWidget,
-  "date/all-options": DateAllOptionsWidget,
-};
 
 class ParameterValueWidget extends Component {
   static propTypes = {
@@ -58,6 +49,12 @@ class ParameterValueWidget extends Component {
     className: PropTypes.string,
     parameters: PropTypes.array,
     dashboard: PropTypes.object,
+    question: PropTypes.object,
+    setParameterValueToDefault: PropTypes.func,
+    // This means the widget will take care of the default value.
+    // Should be used for dashboards and native questions in the parameter bar,
+    // Don't use in settings sidebars.
+    enableRequiredBehavior: PropTypes.bool,
   };
 
   state = { isFocused: false };
@@ -70,12 +67,26 @@ class ParameterValueWidget extends Component {
   }
 
   onFocusChanged = isFocused => {
-    const { focusChanged: parentFocusChanged } = this.props;
+    const { focusChanged: parentFocusChanged, enableRequiredBehavior } =
+      this.props;
     if (parentFocusChanged) {
       parentFocusChanged(isFocused);
     }
     this.setState({ isFocused });
+
+    if (enableRequiredBehavior && !isFocused) {
+      this.resetToDefault();
+    }
   };
+
+  resetToDefault() {
+    const { required, default: defaultValue } = this.props.parameter;
+    const { value } = this.props;
+
+    if (required && defaultValue && !value) {
+      this.props.setValue(defaultValue);
+    }
+  }
 
   onPopoverClose = () => {
     if (this.valuePopover.current) {
@@ -87,11 +98,25 @@ class ParameterValueWidget extends Component {
     return this.trigger.current;
   };
 
-  getWidgetStatusIcon = () => {
+  getActionIcon() {
     if (this.props.isFullscreen) {
       return null;
     }
 
+    const icon =
+      this.props.enableRequiredBehavior && this.props.parameter.required
+        ? this.getRequiredActionIcon()
+        : this.getOptionalActionIcon();
+
+    if (!icon) {
+      // This is required to keep input width constant
+      return <WidgetStatusIcon name="empty" />;
+    }
+
+    return icon;
+  }
+
+  getOptionalActionIcon() {
     if (this.props.value != null) {
       return (
         <WidgetStatusIcon
@@ -101,19 +126,28 @@ class ParameterValueWidget extends Component {
       );
     }
 
-    const noPopover = hasNoPopover(this.props.parameter);
-
-    if (noPopover && this.state.isFocused) {
-      return <WidgetStatusIcon name="enter_or_return" />;
-    }
-
-    if (!noPopover) {
+    if (!hasNoPopover(this.props.parameter)) {
       return <WidgetStatusIcon name="chevrondown" />;
     }
+  }
 
-    // This is required to keep input width constant
-    return <WidgetStatusIcon name="empty" />;
-  };
+  getRequiredActionIcon() {
+    const { required, default: defaultValue } = this.props.parameter;
+    const { value, setParameterValueToDefault = () => {} } = this.props;
+
+    if (
+      required &&
+      defaultValue &&
+      !areParameterValuesIdentical(value, defaultValue)
+    ) {
+      return (
+        <WidgetStatusIcon
+          name="refresh"
+          onClick={() => setParameterValueToDefault(this.props.parameter.id)}
+        />
+      );
+    }
+  }
 
   render() {
     const { parameter, value, isEditing, placeholder, className } = this.props;
@@ -144,59 +178,59 @@ class ParameterValueWidget extends Component {
             onFocusChanged={this.onFocusChanged}
             onPopoverClose={this.onPopoverClose}
           />
-          {this.getWidgetStatusIcon()}
+          {this.getActionIcon()}
         </div>
       );
-    } else {
-      const placeholderText = isEditing
-        ? isDateParameter(parameter)
-          ? t`Select a default value…`
-          : t`Enter a default value…`
-        : placeholder || t`Select…`;
-
-      return (
-        <PopoverWithTrigger
-          ref={this.valuePopover}
-          targetOffsetX={16}
-          triggerElement={
-            <div
-              ref={this.trigger}
-              className={cx(S.parameter, className, {
-                [S.selected]: hasValue,
-              })}
-              role="button"
-              aria-label={placeholder}
-            >
-              {showTypeIcon && (
-                <Icon
-                  name={parameterTypeIcon}
-                  className="flex-align-left mr1 flex-no-shrink"
-                  size={16}
-                />
-              )}
-              <div className="mr1 text-nowrap">
-                <FormattedParameterValue
-                  parameter={parameter}
-                  value={value}
-                  placeholder={placeholderText}
-                />
-              </div>
-              {this.getWidgetStatusIcon()}
-            </div>
-          }
-          target={this.getTargetRef}
-          // make sure the full date picker will expand to fit the dual calendars
-          autoWidth={parameter.type === "date/all-options"}
-        >
-          <Widget
-            {...this.props}
-            target={this.getTargetRef()}
-            onFocusChanged={this.onFocusChanged}
-            onPopoverClose={this.onPopoverClose}
-          />
-        </PopoverWithTrigger>
-      );
     }
+
+    const placeholderText = isEditing
+      ? isDateParameter(parameter)
+        ? t`Select a default value…`
+        : t`Enter a default value…`
+      : placeholder || t`Select…`;
+
+    return (
+      <PopoverWithTrigger
+        ref={this.valuePopover}
+        targetOffsetX={16}
+        triggerElement={
+          <div
+            ref={this.trigger}
+            className={cx(S.parameter, className, {
+              [S.selected]: hasValue,
+            })}
+            role="button"
+            aria-label={placeholder}
+          >
+            {showTypeIcon && (
+              <Icon
+                name={parameterTypeIcon}
+                className="flex-align-left mr1 flex-no-shrink"
+                size={16}
+              />
+            )}
+            <div className="mr1 text-nowrap">
+              <FormattedParameterValue
+                parameter={parameter}
+                value={value}
+                placeholder={placeholderText}
+              />
+            </div>
+            {this.getActionIcon()}
+          </div>
+        }
+        target={this.getTargetRef}
+        // make sure the full date picker will expand to fit the dual calendars
+        autoWidth={parameter.type === "date/all-options"}
+      >
+        <Widget
+          {...this.props}
+          target={this.getTargetRef()}
+          onFocusChanged={this.onFocusChanged}
+          onPopoverClose={this.onPopoverClose}
+        />
+      </PopoverWithTrigger>
+    );
   }
 }
 
@@ -216,17 +250,45 @@ function Widget({
   question,
   dashboard,
   target,
+  enableRequiredBehavior,
 }) {
   const normalizedValue = Array.isArray(value)
     ? value
     : [value].filter(v => v != null);
 
+  // TODO this is due to some widgets not supporting focusChanged callback.
+  const setValueOrDefault = value => {
+    const { required, default: defaultValue } = parameter;
+    const shouldUseDefault =
+      enableRequiredBehavior && required && defaultValue && !value?.length;
+
+    setValue(shouldUseDefault ? defaultValue : value);
+    onPopoverClose();
+  };
+
   if (isDateParameter(parameter)) {
-    const DateWidget = DATE_WIDGETS[parameter.type];
+    const DateWidget = {
+      "date/single": DateSingleWidget,
+      "date/range": DateRangeWidget,
+      "date/relative": DateRelativeWidget,
+      "date/month-year": DateMonthYearWidget,
+      "date/quarter-year": DateQuarterYearWidget,
+      "date/all-options": DateAllOptionsWidget,
+    }[parameter.type];
+
     return (
-      <DateWidget value={value} setValue={setValue} onClose={onPopoverClose} />
+      <DateWidget
+        value={value}
+        initialValue={value}
+        defaultValue={parameter.default}
+        required={parameter.required}
+        setValue={setValue}
+        onClose={onPopoverClose}
+      />
     );
-  } else if (isTextWidget(parameter)) {
+  }
+
+  if (isTextWidget(parameter)) {
     return (
       <TextWidget
         value={value}
@@ -238,23 +300,25 @@ function Widget({
         focusChanged={onFocusChanged}
       />
     );
-  } else if (isNumberParameter(parameter)) {
+  }
+
+  if (isNumberParameter(parameter)) {
     const arity = getNumberParameterArity(parameter);
     return (
       <NumberInputWidget
         value={normalizedValue}
-        setValue={value => {
-          setValue(value);
-          onPopoverClose();
-        }}
+        setValue={setValueOrDefault}
         arity={arity}
         infixText={typeof arity === "number" && arity > 1 ? t`and` : undefined}
         autoFocus
         placeholder={isEditing ? t`Enter a default value…` : undefined}
         label={getParameterWidgetTitle(parameter)}
+        parameter={parameter}
       />
     );
-  } else if (isFieldWidget(parameter)) {
+  }
+
+  if (isFieldWidget(parameter)) {
     return (
       <ParameterFieldWidget
         target={target}
@@ -262,33 +326,25 @@ function Widget({
         parameters={parameters}
         question={question}
         dashboard={dashboard}
-        placeholder={placeholder}
         value={normalizedValue}
         fields={parameter.fields}
-        setValue={value => {
-          setValue(value);
-          onPopoverClose();
-        }}
+        setValue={setValueOrDefault}
         isEditing={isEditing}
-        focusChanged={onFocusChanged}
-      />
-    );
-  } else {
-    return (
-      <StringInputWidget
-        value={normalizedValue}
-        setValue={value => {
-          setValue(value);
-          onPopoverClose();
-        }}
-        className={className}
-        autoFocus
-        placeholder={isEditing ? t`Enter a default value…` : undefined}
-        arity={getStringParameterArity(parameter)}
-        label={getParameterWidgetTitle(parameter)}
       />
     );
   }
+  return (
+    <StringInputWidget
+      value={normalizedValue}
+      setValue={setValueOrDefault}
+      className={className}
+      autoFocus
+      placeholder={isEditing ? t`Enter a default value…` : undefined}
+      arity={getStringParameterArity(parameter)}
+      label={getParameterWidgetTitle(parameter)}
+      parameter={parameter}
+    />
+  );
 }
 
 Widget.propTypes = {

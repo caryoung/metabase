@@ -1,18 +1,15 @@
 /* eslint-disable react/prop-types */
 import { Component } from "react";
 import { Motion, spring } from "react-motion";
-import _ from "underscore";
 import { t } from "ttag";
 
 import ExplicitSize from "metabase/components/ExplicitSize";
-import QueryValidationError from "metabase/query_builder/components/QueryValidationError";
 import { SIDEBAR_SIZES } from "metabase/query_builder/constants";
 import LoadingAndErrorWrapper from "metabase/components/LoadingAndErrorWrapper";
 import Toaster from "metabase/components/Toaster";
 import { TimeseriesChrome } from "metabase/querying";
 
 import * as Lib from "metabase-lib";
-import NativeQuery from "metabase-lib/queries/NativeQuery";
 
 import DatasetEditor from "../DatasetEditor";
 import NativeQueryEditor from "../NativeQueryEditor";
@@ -192,8 +189,9 @@ class View extends Component {
 
   getRightSidebar = () => {
     const { question } = this.props;
-    const isStructured = question.isStructured();
-    return isStructured
+    const { isNative } = Lib.queryDisplayInfo(question.query());
+
+    return !isNative
       ? this.getRightSidebarForStructuredQuery()
       : this.getRightSidebarForNativeQuery();
   };
@@ -201,12 +199,9 @@ class View extends Component {
   renderHeader = () => {
     const { question } = this.props;
     const query = question.query();
-    const legacyQuery = question.legacyQuery({ useStructuredQuery: true });
+    const { isNative } = Lib.queryDisplayInfo(query);
 
-    const isNewQuestion =
-      question.isStructured() &&
-      Lib.sourceTableOrCardId(query) === null &&
-      !legacyQuery.sourceQuery();
+    const isNewQuestion = !isNative && Lib.sourceTableOrCardId(query) === null;
 
     return (
       <Motion
@@ -229,7 +224,14 @@ class View extends Component {
   };
 
   renderNativeQueryEditor = () => {
-    const { question, card, height, isDirty, isNativeEditorOpen } = this.props;
+    const {
+      question,
+      card,
+      height,
+      isDirty,
+      isNativeEditorOpen,
+      setParameterValueToDefault,
+    } = this.props;
     const legacyQuery = question.legacyQuery();
 
     // Normally, when users open native models,
@@ -239,7 +241,8 @@ class View extends Component {
     // So the model is opened as an underlying native question and the query editor becomes visible
     // This check makes it hide the editor in this particular case
     // More details: https://github.com/metabase/metabase/pull/20161
-    if (question.isDataset() && !question.isQueryEditable()) {
+    const { isEditable } = Lib.queryDisplayInfo(question.query());
+    if (question.isDataset() && !isEditable) {
       return null;
     }
 
@@ -252,6 +255,7 @@ class View extends Component {
           isOpen={legacyQuery.isEmpty() || isDirty}
           isInitiallyOpen={isNativeEditorOpen}
           datasetQuery={card && card.dataset_query}
+          setParameterValueToDefault={setParameterValueToDefault}
         />
       </NativeQueryEditorContainer>
     );
@@ -261,10 +265,8 @@ class View extends Component {
     const { question, mode, parameters, isLiveResizable, setParameterValue } =
       this.props;
 
-    const legacyQuery = question.legacyQuery({ useStructuredQuery: true });
     const queryMode = mode && mode.queryMode();
-    const isNative = legacyQuery instanceof NativeQuery;
-    const validationError = _.first(legacyQuery.validate?.());
+    const { isNative } = Lib.queryDisplayInfo(question.query());
     const isSidebarOpen = leftSidebar || rightSidebar;
 
     return (
@@ -282,18 +284,14 @@ class View extends Component {
           />
         )}
 
-        {validationError ? (
-          <QueryValidationError error={validationError} />
-        ) : (
-          <StyledDebouncedFrame enabled={!isLiveResizable}>
-            <QueryVisualization
-              {...this.props}
-              noHeader
-              className="spread"
-              mode={queryMode}
-            />
-          </StyledDebouncedFrame>
-        )}
+        <StyledDebouncedFrame enabled={!isLiveResizable}>
+          <QueryVisualization
+            {...this.props}
+            noHeader
+            className="spread"
+            mode={queryMode}
+          />
+        </StyledDebouncedFrame>
         <TimeseriesChrome {...this.props} className="flex-no-shrink" />
         <ViewFooter {...this.props} className="flex-no-shrink" />
       </QueryBuilderMain>
@@ -321,12 +319,9 @@ class View extends Component {
     }
 
     const query = question.query();
-    const legacyQuery = question.legacyQuery({ useStructuredQuery: true });
+    const { isNative } = Lib.queryDisplayInfo(question.query());
 
-    const isNewQuestion =
-      question.isStructured() &&
-      Lib.sourceTableOrCardId(query) === null &&
-      !legacyQuery.sourceQuery();
+    const isNewQuestion = !isNative && Lib.sourceTableOrCardId(query) === null;
 
     if (isNewQuestion && queryBuilderMode === "view") {
       return (
@@ -361,7 +356,7 @@ class View extends Component {
         <QueryBuilderViewRoot className="QueryBuilder">
           {isHeaderVisible && this.renderHeader()}
           <QueryBuilderContentContainer>
-            {question.isStructured() && (
+            {!isNative && (
               <QueryViewNotebook
                 isNotebookContainerOpen={isNotebookContainerOpen}
                 {...this.props}

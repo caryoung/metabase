@@ -183,7 +183,7 @@ export const enableColumnInQuery = (
   const newQuery = displayInfo.selected
     ? query
     : Lib.addField(query, STAGE_INDEX, metadataColumn);
-  return Lib.dropStageIfEmpty(newQuery, STAGE_INDEX);
+  return Lib.dropEmptyStages(newQuery);
 };
 
 export const disableColumnInQuery = (
@@ -195,7 +195,7 @@ export const disableColumnInQuery = (
   }
 
   const newQuery = Lib.removeField(query, STAGE_INDEX, metadataColumn);
-  return Lib.dropStageIfEmpty(newQuery, STAGE_INDEX);
+  return Lib.dropEmptyStages(newQuery);
 };
 
 export const findColumnSettingIndex = (
@@ -224,7 +224,7 @@ export const addColumnInSettings = (
   if (settingIndex >= 0) {
     newSettings[settingIndex] = { ...newSettings[settingIndex], enabled: true };
   } else {
-    const fieldRef = Lib.legacyRef(column);
+    const fieldRef = Lib.legacyRef(query, STAGE_INDEX, column);
     newSettings.push({ name, fieldRef, enabled: true });
   }
 

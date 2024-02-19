@@ -32,6 +32,7 @@
    [metabase.query-processor.timezone :as qp.timezone]
    [metabase.query-processor.util :as qp.util]
    [metabase.query-processor.util.add-alias-info :as add]
+   [metabase.query-processor.util.relative-datetime :as qp.relative-datetime]
    [metabase.util :as u]
    [metabase.util.date-2 :as u.date]
    [metabase.util.honey-sql-2 :as h2x]
@@ -199,10 +200,6 @@
 (defmethod sql.qp/unix-timestamp->honeysql [:snowflake :milliseconds] [_ _ expr] [:to_timestamp expr 3])
 (defmethod sql.qp/unix-timestamp->honeysql [:snowflake :microseconds] [_ _ expr] [:to_timestamp expr 6])
 
-(defmethod sql.qp/current-datetime-honeysql-form :snowflake
-  [_]
-  (h2x/with-database-type-info :%current_timestamp :TIMESTAMPTZ))
-
 (defmethod sql.qp/add-interval-honeysql-form :snowflake
   [_ hsql-form amount unit]
   [:dateadd
@@ -217,8 +214,12 @@
 
 (defn- date-trunc
   [unit expr]
-  (-> [:date_trunc unit expr]
-      (h2x/with-database-type-info (h2x/database-type expr))))
+  (let [acceptable-types (case unit
+                           (:millisecond :second :minute :hour) #{"time" "timestamp"}
+                           (:day :week :month :quarter :year)   #{"date" "timestamp"})
+        expr             (h2x/cast-unless-type-in "timestamp" acceptable-types expr)]
+    (-> [:date_trunc unit expr]
+        (h2x/with-database-type-info (h2x/database-type expr)))))
 
 (defmethod sql.qp/date [:snowflake :default]         [_ _ expr] expr)
 (defmethod sql.qp/date [:snowflake :minute]          [_ _ expr] (date-trunc :minute expr))
@@ -341,8 +342,9 @@
   accept either. Throw an Exception if neither key can be found."
   {:arglists '([database])}
   [{details :details}]
-  (or (:db details)
-      (:dbname details)
+  ;; ignore any blank keys
+  (or (m/find-first (every-pred string? (complement str/blank?))
+                    ((juxt :db :dbname) details))
       (throw (Exception. (tru "Invalid Snowflake connection details: missing DB name.")))))
 
 (defn- query-db-name []
@@ -401,6 +403,10 @@
            [:convert_timezone (or source-timezone (qp.timezone/results-timezone-id)) target-timezone hsql-form]])
         (h2x/with-database-type-info "timestampntz"))))
 
+(defmethod sql.qp/->honeysql [:snowflake :relative-datetime]
+  [driver [_ amount unit]]
+  (qp.relative-datetime/maybe-cacheable-relative-datetime-honeysql driver unit amount))
+
 (defmethod driver/table-rows-seq :snowflake
   [driver database table]
   (sql-jdbc/query driver database {:select [:*]
@@ -418,16 +424,31 @@
          driver
          database
          nil
+         ;; you know what, if we really wanted to make this efficient we would do
+         ;;
+         ;;    SHOW SCHEMAS IN DATABASE <db>
+         ;;
+         ;; first, and filter out the ones we're not interested in, and THEN do
+         ;;
+         ;;    SHOW OBJECTS IN SCHEMA <schema>
+         ;;
+         ;; for each of the schemas we wanted to sync. Right now we're fetching EVERY table, including ones from schemas
+         ;; we aren't interested in.
          (fn [^Connection conn]
-           {:tables (->> (sql-jdbc.describe-database/db-tables driver (.getMetaData conn) nil db-name)
-                         (filter (fn [{schema :schema table-name :name}]
-                                   (and (not (contains? excluded-schemas schema))
-                                        (driver.s/include-schema? inclusion-patterns
-                                                                  exclusion-patterns
-                                                                  schema)
-                                        (sql-jdbc.sync/have-select-privilege? driver conn schema table-name))))
-                         (map #(dissoc % :type))
-                         set)}))))))
+           {:tables (into #{}
+                          (comp (filter (fn [{schema :schema table-name :name}]
+                                          (and (not (contains? excluded-schemas schema))
+                                               (driver.s/include-schema? inclusion-patterns
+                                                                         exclusion-patterns
+                                                                         schema)
+                                               (sql-jdbc.sync/have-select-privilege? driver conn schema table-name))))
+                                (map #(dissoc % :type)))
+                          ;; The Snowflake JDBC drivers is dumb and broken, it will narrow the results to the current
+                          ;; session schema pass in `nil` for `schema-or-nil` to `getTables()`... `%` seems to fix it.
+                          ;; See [[metabase.driver.snowflake/describe-database-default-schema-test]] and
+                          ;; https://metaboat.slack.com/archives/C04DN5VRQM6/p1706220295862639?thread_ts=1706156558.940489&cid=C04DN5VRQM6
+                          ;; for more info.
+                          (sql-jdbc.describe-database/db-tables driver (.getMetaData conn) "%" db-name))}))))))
 
 (defmethod driver/describe-table :snowflake
   [driver database table]

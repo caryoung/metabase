@@ -11,10 +11,8 @@ import type {
   Breakout,
   DatabaseId,
   DatasetQuery,
-  DependentMetadataItem,
   ExpressionClause,
   Filter,
-  Join,
   TableId,
   StructuredDatasetQuery,
   StructuredQuery as StructuredQueryObject,
@@ -25,15 +23,10 @@ import {
   DISPLAY_QUOTES,
 } from "metabase-lib/expressions/format";
 import {
-  isVirtualCardId,
-  getQuestionIdFromVirtualTableId,
-} from "metabase-lib/metadata/utils/saved-questions";
-import {
   getAggregationOperators,
   isCompatibleAggregationOperatorForField,
 } from "metabase-lib/operators/utils";
 import { TYPE } from "metabase-lib/types/constants";
-import { isSegment } from "metabase-lib/queries/utils/filter";
 import { getUniqueExpressionName } from "metabase-lib/queries/utils/expression";
 import * as Q from "metabase-lib/queries/utils/query";
 import { createLookupByProperty } from "metabase-lib/utils";
@@ -57,9 +50,6 @@ import AtomicQuery from "./AtomicQuery";
 import AggregationWrapper from "./structured/Aggregation";
 import BreakoutWrapper from "./structured/Breakout";
 import FilterWrapper from "./structured/Filter";
-import JoinWrapper from "./structured/Join";
-
-import { getStructuredQueryTable } from "./utils/structured-query-table";
 
 type DimensionFilterFn = (dimension: Dimension) => boolean;
 export type FieldFilterFn = (filter: Field) => boolean;
@@ -82,19 +72,11 @@ export interface DimensionOption {
   dimension: Dimension;
 }
 
-// type guards for determining data types
-export const isSegmentOption = (content: any): content is SegmentOption =>
-  content?.filter && isSegment(content.filter);
-
 export interface SegmentOption {
   name: string;
   filter: ["segment", number];
   icon: string;
   query: StructuredQuery;
-}
-
-function unwrapJoin(join: Join | JoinWrapper): Join {
-  return join instanceof JoinWrapper ? join.raw() : join;
 }
 
 /**
@@ -126,28 +108,6 @@ class StructuredQuery extends AtomicQuery {
 
   /* Query superclass methods */
 
-  /**
-   * @returns true if this query is in a state where it can be run.
-   */
-  canRun() {
-    return !!(this._sourceTableId() || this.sourceQuery());
-  }
-
-  /**
-   * @returns true if we have metadata for the root source table loaded
-   */
-  hasMetadata(): boolean {
-    const metadata = this.metadata();
-    return metadata != null && metadata.table(this._sourceTableId()) != null;
-  }
-
-  // Whether the user can modify and run this query
-  // Determined based on availability of database and source table metadata
-  // For queries based on questions expects virtual table metadata for the source card
-  isEditable(): boolean {
-    return this._database() != null && this.hasMetadata();
-  }
-
   /* AtomicQuery superclass methods */
 
   /**
@@ -176,22 +136,7 @@ class StructuredQuery extends AtomicQuery {
     return databaseId != null ? this._metadata.database(databaseId) : null;
   }
 
-  /**
-   * @returns the database engine object, if a database is selected and loaded.
-   */
-  engine(): string | null | undefined {
-    const database = this._database();
-    return database && database.engine;
-  }
-
   /* Methods unique to this query type */
-
-  /**
-   * @returns a new reset @type {StructuredQuery} with the same parent @type {Question}
-   */
-  reset(): StructuredQuery {
-    return new StructuredQuery(this._originalQuestion);
-  }
 
   /**
    * @returns the underlying MBQL query object
@@ -208,31 +153,6 @@ class StructuredQuery extends AtomicQuery {
     fn: (q: StructuredQueryObject) => StructuredQueryObject,
   ): StructuredQuery {
     return this._updateQuery(fn, []);
-  }
-
-  /**
-   * @returns a new query with the provided Database set.
-   */
-  setDatabase(database: Database): StructuredQuery {
-    return this.setDatabaseId(database.id);
-  }
-
-  /**
-   * @returns a new query with the provided Database ID set.
-   */
-  setDatabaseId(databaseId: DatabaseId): StructuredQuery {
-    if (databaseId !== this._databaseId()) {
-      // TODO: this should reset the rest of the query?
-      return new StructuredQuery(
-        this._originalQuestion,
-        chain(this.datasetQuery())
-          .assoc("database", databaseId)
-          .assoc("query", {})
-          .value(),
-      );
-    } else {
-      return this;
-    }
   }
 
   /**
@@ -268,174 +188,10 @@ class StructuredQuery extends AtomicQuery {
    * @returns the table object, if a table is selected and loaded.
    */
   table = _.once((): Table | null => {
-    return getStructuredQueryTable(this.question(), this);
+    const question = this.question();
+    const metadata = question.metadata();
+    return metadata.table(this._sourceTableId());
   });
-
-  /**
-   * Removes invalid clauses from the query (and source-query, recursively)
-   */
-  clean({ skipFilters = false } = {}): StructuredQuery {
-    if (!this.hasMetadata()) {
-      console.warn("Warning: can't clean query without metadata!");
-      return this;
-    }
-
-    let query = this;
-    // first clean the sourceQuery, if any, recursively
-    const sourceQuery = query.sourceQuery();
-
-    if (sourceQuery) {
-      query = query.setSourceQuery(sourceQuery.clean({ skipFilters }));
-    }
-
-    return query.cleanJoins().cleanExpressions().cleanFields().cleanEmpty();
-  }
-
-  /**
-   * Removes empty/useless layers of nesting (recursively)
-   */
-  cleanNesting(): StructuredQuery {
-    // first clean the sourceQuery, if any, recursively
-    const sourceQuery = this.sourceQuery();
-
-    if (sourceQuery) {
-      return this.setSourceQuery(sourceQuery.cleanNesting()).cleanEmpty();
-    } else {
-      return this;
-    }
-  }
-
-  private cleanJoins(): StructuredQuery {
-    return this._cleanClauseList("joins");
-  }
-
-  cleanExpressions(): StructuredQuery {
-    return this; // TODO
-  }
-
-  cleanFilters(): StructuredQuery {
-    return this._cleanClauseList("filters");
-  }
-
-  cleanFields(): StructuredQuery {
-    return this; // TODO
-  }
-
-  /**
-   * If this query is empty and there's a source-query, strip off this query, returning the source-query
-   */
-  cleanEmpty(): StructuredQuery {
-    const sourceQuery = this.sourceQuery();
-
-    if (sourceQuery && !this.hasAnyClauses()) {
-      return sourceQuery;
-    } else {
-      return this;
-    }
-  }
-
-  isValid() {
-    if (!this.hasData()) {
-      return false;
-    }
-
-    const sourceQuery = this.sourceQuery();
-
-    if (sourceQuery && !sourceQuery.isValid()) {
-      return false;
-    }
-
-    if (
-      !this._isValidClauseList("joins") ||
-      !this._isValidClauseList("filters") ||
-      !this._isValidClauseList("aggregations") ||
-      !this._isValidClauseList("breakouts")
-    ) {
-      return false;
-    }
-
-    const table = this.table();
-
-    // NOTE: special case for Google Analytics which requires an aggregation
-    if (table.entity_type === "entity/GoogleAnalyticsTable") {
-      if (!this.hasAggregations()) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  _cleanClauseList(listName) {
-    let query = this;
-
-    for (let index = 0; index < query[listName]().length; index++) {
-      const clause = query[listName]()[index];
-
-      if (!this._validateClause(clause)) {
-        console.warn("Removing invalid MBQL clause", clause);
-        query = clause.remove();
-        // since we're removing them in order we need to decrement index when we remove one
-        index -= 1;
-      }
-    }
-
-    return query;
-  }
-
-  _isValidClauseList(listName) {
-    for (const clause of this[listName]()) {
-      if (!this._validateClause(clause)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  _validateClause(clause) {
-    try {
-      return clause.isValid();
-    } catch (e) {
-      console.warn("Error thrown while validating clause", clause, e);
-      return false;
-    }
-  }
-
-  /**
-   * @deprecated use MLv2
-   */
-  hasData() {
-    return !!this.table();
-  }
-
-  hasAnyClauses() {
-    // this list should be kept in sync with BE in `metabase.models.card/model-supports-implicit-actions?`
-
-    const query = this.getMLv2Query();
-    const stageIndex = this.getQueryStageIndex();
-
-    const hasJoins = Lib.joins(query, stageIndex).length > 0;
-
-    return (
-      hasJoins ||
-      this.hasExpressions() ||
-      this.hasFilters() ||
-      this.hasAggregations() ||
-      this.hasBreakouts() ||
-      this._hasSorts() ||
-      this.hasLimit() ||
-      this._hasFields()
-    );
-  }
-
-  hasExpressions() {
-    return Object.keys(this.expressions()).length > 0;
-  }
-
-  hasFilters() {
-    return this.filters().length > 0;
-  }
 
   hasAggregations() {
     return this.aggregations().length > 0;
@@ -443,16 +199,6 @@ class StructuredQuery extends AtomicQuery {
 
   hasBreakouts() {
     return this.breakouts().length > 0;
-  }
-
-  _hasSorts() {
-    const query = this.getMLv2Query();
-    return Lib.orderBys(query).length > 0;
-  }
-
-  hasLimit(stageIndex = this.queries().length - 1) {
-    const query = this.getMLv2Query();
-    return Lib.hasLimit(query, stageIndex);
   }
 
   _hasFields() {
@@ -488,38 +234,6 @@ class StructuredQuery extends AtomicQuery {
    */
   filter(filter: Filter | FilterWrapper) {
     return this.addFilter(filter);
-  }
-
-  /**
-   * @deprecated use metabase-lib v2 to manage joins
-   */
-  join(join) {
-    return this._updateQuery(Q.addJoin, [unwrapJoin(join)]);
-  }
-
-  // JOINS
-
-  /**
-   * @deprecated use metabase-lib v2 to manage joins
-   */
-  joins = _.once((): JoinWrapper[] => {
-    return Q.getJoins(this.legacyQuery({ useStructuredQuery: true })).map(
-      (join, index) => new JoinWrapper(join, index, this),
-    );
-  });
-
-  /**
-   * @deprecated use metabase-lib v2 to manage joins
-   */
-  updateJoin(index, join) {
-    return this._updateQuery(Q.updateJoin, [index, unwrapJoin(join)]);
-  }
-
-  /**
-   * @deprecated use metabase-lib v2 to manage joins
-   */
-  removeJoin(_index) {
-    return this._updateQuery(Q.removeJoin, arguments);
   }
 
   // AGGREGATIONS
@@ -658,13 +372,6 @@ class StructuredQuery extends AtomicQuery {
     return this._updateQuery(Q.removeAggregation, arguments);
   }
 
-  /**
-   * @returns {StructuredQuery} new query with all aggregations removed.
-   */
-  clearAggregations(): StructuredQuery {
-    return this._updateQuery(Q.clearAggregations, arguments);
-  }
-
   // BREAKOUTS
 
   /**
@@ -683,13 +390,11 @@ class StructuredQuery extends AtomicQuery {
   /**
    * @param includedBreakout The breakout to include in the options even if it's already used. If true, include all options.
    * @param fieldFilter An option @type {Field} predicate to filter out options
-   * @param isValidation Temporary flag to ensure MLv1 and MLv2 compat during query clean phase
    * @returns @type {DimensionOptions} that can be used as breakouts, excluding used breakouts, unless @param {breakout} is provided.
    */
   breakoutOptions(
     includedBreakout?: any,
     fieldFilter: FieldFilterFn = () => true,
-    isValidation = false,
   ): DimensionOptions {
     // the collection of field dimensions
     const breakoutDimensions =
@@ -708,9 +413,7 @@ class StructuredQuery extends AtomicQuery {
       );
     }
 
-    return isValidation
-      ? this._dimensionOptionsForValidation(filter)
-      : this.dimensionOptions(filter);
+    return this.dimensionOptions(filter);
   }
 
   /**
@@ -722,14 +425,6 @@ class StructuredQuery extends AtomicQuery {
 
   canNest(): boolean {
     return Boolean(this._database()?.hasFeature("nested-queries"));
-  }
-
-  /**
-   * @returns whether the current query has a valid breakout
-   */
-  hasValidBreakout() {
-    const breakouts = this.breakouts();
-    return breakouts.length > 0 && breakouts[0].isValid();
   }
 
   /**
@@ -751,13 +446,6 @@ class StructuredQuery extends AtomicQuery {
    */
   removeBreakout(_index: number) {
     return this._updateQuery(Q.removeBreakout, arguments);
-  }
-
-  /**
-   * @returns {StructuredQuery} new query with all breakouts removed.
-   */
-  clearBreakouts() {
-    return this._updateQuery(Q.clearBreakouts, arguments);
   }
 
   // FILTERS
@@ -905,20 +593,6 @@ class StructuredQuery extends AtomicQuery {
     return this._updateQuery(Q.removeFilter, arguments);
   }
 
-  /**
-   * @returns {StructuredQuery} new query with all filters removed.
-   */
-  clearFilters() {
-    return this._updateQuery(Q.clearFilters, arguments);
-  }
-
-  /**
-   * @returns {StructuredQuery} new query with all segment filters removed
-   */
-  clearSegments() {
-    return this._updateQuery(Q.clearSegments, arguments);
-  }
-
   // EXPRESSIONS
   expressions = _.once((): ExpressionClause => {
     return Q.getExpressions(this.legacyQuery({ useStructuredQuery: true }));
@@ -936,30 +610,6 @@ class StructuredQuery extends AtomicQuery {
     }
 
     return query;
-  }
-
-  clearExpressions() {
-    let query = this._updateQuery(Q.clearExpressions, arguments);
-
-    // extra logic for removing expressions in fields clause
-    // TODO: push into query/expression?
-    for (const name of Object.keys(this.expressions())) {
-      const index = query._indexOfField(["expression", name]);
-
-      if (index >= 0) {
-        query = query.removeField(index);
-      }
-    }
-
-    if (this.isRaw() && this.sourceQuery()) {
-      query = query.clearFields();
-    }
-
-    return query;
-  }
-
-  _indexOfField(fieldRef) {
-    return this.fields().findIndex(f => _.isEqual(f, fieldRef));
   }
 
   // FIELDS
@@ -980,38 +630,7 @@ class StructuredQuery extends AtomicQuery {
     return this._updateQuery(Q.removeField, arguments);
   }
 
-  clearFields() {
-    return this._updateQuery(Q.clearFields, arguments);
-  }
-
   // DIMENSION OPTIONS
-  _keyForFK(source, destination) {
-    if (source && destination) {
-      return `${source.id},${destination.id}`;
-    }
-
-    return null;
-  }
-
-  _getExplicitJoinsSet(joins) {
-    const joinDimensionPairs = joins.map(join => {
-      const dimensionPairs = join.getDimensions();
-      return dimensionPairs.map(pair => {
-        const [parentDimension, joinDimension] = pair;
-        return this._keyForFK(
-          parentDimension && parentDimension.field(),
-          joinDimension && joinDimension.field(),
-        );
-      });
-    });
-
-    const flatJoinDimensions = _.flatten(joinDimensionPairs);
-
-    const explicitJoins = new Set(flatJoinDimensions);
-    explicitJoins.delete(null);
-    return explicitJoins;
-  }
-
   dimensionOptions(
     dimensionFilter: DimensionFilterFn = _dimension => true,
   ): DimensionOptions {
@@ -1020,16 +639,6 @@ class StructuredQuery extends AtomicQuery {
       fks: [],
       dimensions: [],
     };
-    const joins = this.joins();
-
-    for (const join of joins) {
-      const joinedDimensionOptions =
-        join.joinedDimensionOptions(dimensionFilter);
-      if (joinedDimensionOptions.count > 0) {
-        dimensionOptions.count += joinedDimensionOptions.count;
-        dimensionOptions.fks.push(joinedDimensionOptions);
-      }
-    }
 
     const table = this.table();
 
@@ -1041,17 +650,12 @@ class StructuredQuery extends AtomicQuery {
         dimensionOptions.dimensions.push(dimension);
       }
 
-      // de-duplicate explicit and implicit joined tables
-      const explicitJoins = this._getExplicitJoinsSet(joins);
-
       const dimensionIsFKReference = dimension => dimension.field?.().isFK();
       const fkDimensions = this.dimensions().filter(dimensionIsFKReference);
 
       for (const dimension of fkDimensions) {
         const field = dimension.field();
 
-        const queryHasExplicitJoin =
-          field && explicitJoins.has(this._keyForFK(field, field.target));
         const isNestedCardTable = table?.isVirtualCard();
         const tableHasExplicitJoin =
           isNestedCardTable &&
@@ -1059,7 +663,7 @@ class StructuredQuery extends AtomicQuery {
             tableField => tableField.id === field.fk_target_field_id,
           );
 
-        if (queryHasExplicitJoin || tableHasExplicitJoin) {
+        if (tableHasExplicitJoin) {
           continue;
         }
 
@@ -1079,55 +683,6 @@ class StructuredQuery extends AtomicQuery {
     }
 
     return new DimensionOptions(dimensionOptions);
-  }
-
-  /**
-   * An extension of dimensionOptions that includes MLv2 friendly dimensions.
-   * MLv1 and MLv2 can produce different field references for the same field.
-   *
-   * Example: if a question is started from another question or model,
-   * MLv2 will always use field literals like [ "field", "TOTAL", { "base-type": "type/Float" } ],
-   * but MLv1 could trace it to a concrete field like [ "field", 1, null ].
-   *
-   * Because dimensionOptions is an MLv1 concept, in will only include concrete field refs in a case like that.
-   * This method will add a field literal for each concrete field ref in the question, so MLv1 will treat them as valid.
-   *
-   * ⚠️ Should ONLY be used for clauses' `isValid` checks.
-   */
-  _dimensionOptionsForValidation(
-    dimensionFilter: DimensionFilter = _dimension => true,
-  ): DimensionOptions {
-    const baseOptions = this.dimensionOptions(dimensionFilter);
-
-    const mlv2FriendlyDimensions: Dimension[] = [];
-
-    baseOptions.dimensions.forEach(dimension => {
-      if (dimension instanceof FieldDimension) {
-        const field = dimension.field();
-        const options = dimension.getOptions();
-
-        // MLv1 picks up join-alias from parent questions/models.
-        // They won't be available in MLv2's field literals,
-        // so we need to remove them.
-        const mlv2Options = _.omit(options, "join-alias");
-        mlv2Options["base-type"] = field.base_type;
-
-        if (isVirtualCardId(field.table_id)) {
-          const mlv2Dimension = Dimension.parseMBQL([
-            "field",
-            field.name,
-            mlv2Options,
-          ]);
-          mlv2FriendlyDimensions.push(mlv2Dimension);
-        }
-      }
-    });
-
-    return new DimensionOptions({
-      count: baseOptions.count + mlv2FriendlyDimensions.length,
-      dimensions: [...baseOptions.dimensions, ...mlv2FriendlyDimensions],
-      fks: baseOptions.fks,
-    });
   }
 
   // FIELD OPTIONS
@@ -1167,13 +722,6 @@ class StructuredQuery extends AtomicQuery {
     );
   });
 
-  /**
-   * @deprecated use metabase-lib v2' to manage joins
-   */
-  private joinedDimensions = _.once((): Dimension[] => {
-    return [].concat(...this.joins().map(join => join.fieldsDimensions()));
-  });
-
   breakoutDimensions = _.once(() => {
     return this.breakouts().map(breakout => this.parseFieldReference(breakout));
   });
@@ -1198,12 +746,9 @@ class StructuredQuery extends AtomicQuery {
       const breakouts = this.breakoutDimensions();
       return [...breakouts, ...aggregations];
     } else if (this._hasFields()) {
-      const fields = this.fieldDimensions();
-      const joined = this.joinedDimensions();
-      return [...fields, ...joined];
+      return this.fieldDimensions();
     } else {
       const expressions = this.expressionDimensions();
-      const joined = this.joinedDimensions();
       const table = this.tableDimensions();
 
       const sorted = _.chain(table)
@@ -1224,7 +769,7 @@ class StructuredQuery extends AtomicQuery {
         .sortBy(d => d.field().position)
         .value();
 
-      return [...sorted, ...expressions, ...joined];
+      return [...sorted, ...expressions];
     }
   });
 
@@ -1253,14 +798,6 @@ class StructuredQuery extends AtomicQuery {
       name: names[index],
     }));
   });
-
-  columnDimensionWithName(columnName) {
-    const index = this.columnNames().findIndex(n => n === columnName);
-
-    if (index >= 0) {
-      return this.columnDimensions()[index];
-    }
-  }
 
   setDatasetQuery(datasetQuery: DatasetQuery): StructuredQuery {
     return new StructuredQuery(this._originalQuestion, datasetQuery);
@@ -1300,30 +837,6 @@ class StructuredQuery extends AtomicQuery {
   }
 
   /**
-   * Returns the "last" nested query that is already summarized, or `null` if none are
-   * */
-  lastSummarizedQuery = _.once((): StructuredQuery | null | undefined => {
-    if (this.hasAggregations() || !this.canNest()) {
-      return this;
-    } else {
-      const sourceQuery = this.sourceQuery();
-      return sourceQuery ? sourceQuery.lastSummarizedQuery() : null;
-    }
-  });
-
-  /**
-   * Returns the "last" nested query that is already summarized, or the query itself.
-   * Used in "view mode" to effectively ignore post-aggregation filter stages
-   */
-  topLevelQuery = _.once((): StructuredQuery => {
-    if (!this.canNest()) {
-      return this;
-    } else {
-      return this.lastSummarizedQuery() || this;
-    }
-  });
-
-  /**
    * returns the corresponding {Dimension} in the sourceQuery, if any
    */
   dimensionForSourceQuery(dimension: Dimension): Dimension | null | undefined {
@@ -1351,7 +864,7 @@ class StructuredQuery extends AtomicQuery {
    */
   rootTable = _.once((): Table => {
     const question = this.question();
-    const questionTableId = question?.tableId();
+    const questionTableId = question?.legacyQueryTableId();
     if (questionTableId != null) {
       return this.metadata().table(questionTableId);
     }
@@ -1391,65 +904,6 @@ class StructuredQuery extends AtomicQuery {
 
   getQueryStageIndex() {
     return this.queries().length - 1;
-  }
-
-  /**
-   * Metadata this query needs to display correctly
-   */
-  dependentMetadata({ foreignTables = true } = {}): DependentMetadataItem[] {
-    const dependencies = [];
-
-    function addDependency(dep) {
-      const existing = _.findWhere(dependencies, _.pick(dep, "type", "id"));
-
-      if (existing) {
-        Object.assign(existing, dep);
-      } else {
-        dependencies.push(dep);
-      }
-    }
-
-    const dbId = this._databaseId();
-    if (dbId) {
-      addDependency({
-        type: "schema",
-        id: dbId,
-      });
-    }
-
-    const tableId = this._sourceTableId();
-    if (tableId) {
-      addDependency({
-        type: "table",
-        id: tableId,
-        foreignTables,
-      });
-
-      if (isVirtualCardId(tableId)) {
-        addDependency({
-          type: "question",
-          id: getQuestionIdFromVirtualTableId(tableId),
-        });
-      }
-    }
-
-    // any explicitly joined tables
-    for (const join of this.joins()) {
-      join.dependentMetadata().forEach(addDependency);
-    }
-
-    // parent query's table IDs
-    const sourceQuery = this.sourceQuery();
-
-    if (sourceQuery) {
-      sourceQuery
-        .dependentMetadata({
-          foreignTables,
-        })
-        .forEach(addDependency);
-    }
-
-    return dependencies;
   }
 
   // INTERNAL

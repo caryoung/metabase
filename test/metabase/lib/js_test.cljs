@@ -3,6 +3,7 @@
    [clojure.test :refer [are deftest is testing]]
    [goog.object :as gobject]
    [malli.core :as mc]
+   [medley.core :as m]
    [metabase.lib.core :as lib]
    [metabase.lib.js :as lib.js]
    [metabase.lib.options :as lib.options]
@@ -292,7 +293,7 @@
         query (lib/query metadata-provider (meta/table-metadata :venues))
 
         array-checker #(when (array? %) (js->clj %))
-        to-legacy-refs (comp array-checker lib.js/legacy-ref)]
+        to-legacy-refs (comp array-checker #(lib.js/legacy-ref query -1 %))]
     (testing "field refs come with options"
       (is (= [["field" (meta/id :venues :id) {"base-type" "type/BigInteger"}]
               ["field" (meta/id :venues :name) {"base-type" "type/Text"}]
@@ -301,14 +302,34 @@
               ["field" (meta/id :venues :longitude) {"base-type" "type/Float"}]
               ["field" (meta/id :venues :price) {"base-type" "type/Integer"}]]
              (->> query lib/returned-columns (map to-legacy-refs)))))
-    (let [legacy-refs (->> query lib/available-segments (map lib.js/legacy-ref))]
+    (testing "segment refs come without options"
+      (is (= [["segment" segment-id]]
+             (->> query lib/available-segments (map to-legacy-refs)))))
+    (testing "metric refs come without options"
+      (is (= [["metric" metric-id]]
+             (->> query lib/available-metrics (map to-legacy-refs)))))
+    (testing "aggregation references (#37698)"
+      (let [query (-> (lib/query meta/metadata-provider (meta/table-metadata :venues))
+                      (lib/aggregate (lib/sum (meta/field-metadata :venues :price)))
+                      ;; The display-name set here gets lost when the corresponding column
+                      ;; is converted to a ref. Currently there is no option that would
+                      ;; survive the aggregation -> column -> ref -> legacy ref conversion
+                      ;; (cf. column-metadata->aggregation-ref and options->legacy-MBQL).
+                      #_(lib/aggregate (lib.options/update-options (lib/avg (meta/field-metadata :venues :price))
+                                                                   assoc :display-name "avg price")))]
+        (is (= [["aggregation" 0]
+                ;; add this back when the second aggregation is added back
+                #_["aggregation-options" ["aggregation 1"] {"display-name" "avg price"}]]
+               (map (comp array-checker #(lib.js/legacy-ref query -1 %))
+                    (lib.js/returned-columns query -1))))))
+    (let [legacy-refs (->> query lib/available-segments (map #(lib.js/legacy-ref query -1 %)))]
       (testing "legacy segment refs come without options"
         (is (= [["segment" segment-id]] (map array-checker legacy-refs))))
       (testing "segment legacy ref can be converted to an expression and back (#37173)"
         (let [segment-expr (lib.js/expression-clause-for-legacy-expression query -1 (first legacy-refs))]
           (is (=? [:segment {} segment-id] segment-expr))
           (is (= ["segment" segment-id] (js->clj (lib.js/legacy-expression-for-expression-clause query -1 segment-expr)))))))
-    (let [legacy-refs (->> query lib/available-metrics (map lib.js/legacy-ref))]
+    (let [legacy-refs (->> query lib/available-metrics (map #(lib.js/legacy-ref query -1 %)))]
       (testing "metric refs come without options"
         (is (= [["metric" metric-id]] (map array-checker legacy-refs))))
       (testing "metric legacy ref can be converted to an expression and back (#37173)"
@@ -378,3 +399,121 @@
            :day]
           (lib.js/expression-clause "time-interval" [(meta/field-metadata :products :created-at)
                                                      (lib.js/expression-clause "interval" [10 "day"] nil) "day"] nil)))))
+
+(defn- js= [a b]
+  (cond
+    ;; Compare objects recursively for each key. If either object contains keys the other does not, that's false.
+    (and (object? a) (object? b))
+    (and (every? (fn [k] (and (gobject/containsKey b k)
+                              (js= (gobject/get a k) (gobject/get b k))))
+                 (js-keys a))
+         (every? (fn [k] (gobject/containsKey a k))
+                 (js-keys b)))
+
+    ;; Compare arrays by length and then pairwise recursively.
+    (and (array? a) (array? b))
+    (and (= (count a) (count b))
+         (every? boolean (map js= (seq a) (seq b))))
+
+    ;; Default to Clojure's = which will compare strings, numbers, Clojure values, etc.
+    ;; That will return false for mismatched types as well.
+    :else (= a b)))
+
+(deftest ^:parallel js=-metatest
+  (testing "check js= works correctly (who tests the tests?)"
+    (testing "should be true"
+      (are [a b] (= true (js= a b))
+           7 7
+           0 0
+           -1 -1
+           nil nil
+           js/undefined nil
+           nil js/undefined
+           "foo" "foo"
+           true true
+           false false
+
+           ;; Objects
+           #js {:foo "bar"}
+           #js {:foo "bar"}
+           #js {:foo "bar", :baz "quux"}
+           #js {:foo "bar", :baz "quux"}
+           ;; Arrays
+           #js ["foo" #js [1 2 3]]
+           #js ["foo" #js [1 2 3]]
+           ;; Nesting
+           #js [#js {:foo "bar", :baz #js [4 5]}, #js [1 2 3]]
+           #js [#js {:foo "bar", :baz #js [4 5]}, #js [1 2 3]]))
+
+    (testing "should be false"
+      (are [a b] (= false (js= a b))
+           7 8
+           0 1
+           -1 1
+           nil {}
+           "foo" "bar"
+           true false
+           false 7
+
+           ;; Objects
+           #js {:foo "bar"} #js {:foo "baz"} ; Different value
+           #js {:foo "bar"} #js {}           ; Missing an a key in b
+           #js {}           #js {:foo "bar"} ; Missing a b key in a
+           #js {:foo nil}   #js {}           ; Missing is not the same as present-but-nil
+           #js {}           #js {:foo nil}   ; And likewise in reverse
+
+           ;; Arrays
+           #js ["foo" "bar"] #js ["foo" "baz"] ; Different values
+           #js ["foo" "bar"] #js ["foo"]       ; Different lengths
+           #js ["foo"]       #js ["foo" "bar"]
+
+           ;; Nesting
+           #js [#js {:foo "bar", :baz #js [4 5 6]}, #js [1 2 3]]
+           #js [#js {:foo "bar", :baz #js [4 5]}, #js [1 2 3]]))))
+
+(deftest ^:parallel display-info-test
+  (let [query    (lib/query meta/metadata-provider (meta/table-metadata :orders))
+        by-name  (m/index-by :name (lib/visible-columns query))
+        discount (by-name "DISCOUNT")]
+    (testing "description is present in the display-info for a column"
+      (is (= (:description discount)
+             (.-description (lib.js/display-info query -1 discount))))
+
+      (testing "but if missing from the input, it's missing from the display-info"
+        (let [di (lib.js/display-info query -1 (dissoc discount :fingerprint))]
+          (is (not (gobject/containsKey di "description"))))))
+
+    (testing "fingerprint is included in display-info"
+      (let [query      (lib/query meta/metadata-provider (meta/table-metadata :orders))
+            by-dca     (m/index-by :lib/desired-column-alias (lib/visible-columns query))
+            discount   (by-dca "DISCOUNT")
+            vendor     (by-dca "PRODUCTS__via__PRODUCT_ID__VENDOR")
+            created-at (by-dca "CREATED_AT")]
+        (testing "for number columns"
+          (is (js= #js {:global #js {:distinctCount 479
+                                     :nil%          0.898}
+                        :type   #js {"type/Number" #js {:avg 5.161009803921569
+                                                        :min 0.17
+                                                        :max 61.7
+                                                        :q1  2.978591571097236
+                                                        :q3  7.337323315325942
+                                                        :sd  3.053736975739119}}}
+                   (.-fingerprint (lib.js/display-info query -1 discount)))))
+        (testing "for string columns"
+          (is (js= #js {:global #js {:distinctCount 200
+                                     :nil%          0}
+                        :type   #js {"type/Text" #js {:percentJson   0
+                                                      :percentUrl    0
+                                                      :percentEmail  0
+                                                      :percentState  0
+                                                      :averageLength 20.6}}}
+                   (.-fingerprint (lib.js/display-info query -1 vendor)))))
+        (testing "for datetime columns"
+          (is (js= #js {:global #js {:distinctCount 10000
+                                     :nil%          0}
+                        :type   #js {"type/DateTime" #js {:earliest "2016-04-30T18:56:13.352Z"
+                                                          :latest   "2020-04-19T14:07:15.657Z"}}}
+                   (.-fingerprint (lib.js/display-info query -1 created-at)))))
+        (testing "unless it's missing in the input"
+          (let [di (lib.js/display-info query -1 (dissoc discount :fingerprint))]
+            (is (not (gobject/containsKey di "fingerprint")))))))))

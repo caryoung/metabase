@@ -1,7 +1,7 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck
 import _ from "underscore";
-import type { DependentMetadataItem, DatasetQuery } from "metabase-types/api";
+import type { DatasetQuery } from "metabase-types/api";
 import type Metadata from "metabase-lib/metadata/Metadata";
 import type Question from "metabase-lib/Question";
 import Dimension from "metabase-lib/Dimension";
@@ -37,24 +37,10 @@ class Query {
   });
 
   /**
-   * Returns a "clean" version of this query with invalid parts removed
-   */
-  clean() {
-    return this;
-  }
-
-  /**
    * Convenience method for accessing the global metadata
    */
   metadata() {
     return this._metadata;
-  }
-
-  /**
-   * Does this query have the sufficient metadata for editing it?
-   */
-  isEditable(): boolean {
-    return true;
   }
 
   /**
@@ -97,13 +83,6 @@ class Query {
    * Variables exposed by this query
    */
   variables(_filter?: (variable: Variable) => boolean): TemplateTagVariable[] {
-    return [];
-  }
-
-  /**
-   * Metadata this query needs to display correctly
-   */
-  dependentMetadata(): DependentMetadataItem[] {
     return [];
   }
 

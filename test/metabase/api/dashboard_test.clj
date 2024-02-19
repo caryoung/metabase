@@ -202,12 +202,14 @@
    :description             nil
    :embedding_params        nil
    :enable_embedding        false
+   :initially_published_at  nil
    :entity_id               true
    :made_public_by_id       nil
    :parameters              []
    :points_of_interest      nil
    :cache_ttl               nil
    :position                nil
+   :width                   "fixed"
    :public_uuid             nil
    :auto_apply_filters      true
    :show_in_getting_started false
@@ -279,7 +281,6 @@
      :model/Dashboard {archived-dash  :id} {:archived      true
                                             :collection_id (:id (collection/user->personal-collection (mt/user->id :crowberto)))
                                             :creator_id    (mt/user->id :crowberto)}]
-
     (testing "should include creator info and last edited info"
       (revision/push-revision!
        {:entity       :model/Dashboard
@@ -796,6 +797,27 @@
             (is (=? {:message "You do not have curate permissions for this Collection."}
                     (mt/user-http-request :rasta :put 403 (str "dashboard/" (u/the-id dash))
                                           {:collection_id (u/the-id new-collection)})))))))))
+
+(deftest update-dashboard-width-setting-test
+  (testing "PUT /api/dashboard/:id"
+    (testing "We can change the dashboard's width between 'fixed' and 'full' settings."
+      (t2.with-temp/with-temp [Dashboard dashboard {}]
+        (with-dashboards-in-writeable-collection [dashboard]
+          (testing "the default dashboard width value is 'fixed'."
+            (is (= "fixed"
+                   (t2/select-one-fn :width Dashboard :id (u/the-id dashboard)))))
+
+          (testing "changing the width setting to 'full' works."
+            (mt/user-http-request :rasta :put 200 (str "dashboard/" (u/the-id dashboard)) {:width "full"})
+            (is (= "full"
+                   (t2/select-one-fn :width Dashboard :id (u/the-id dashboard)))))
+
+          (testing "values that are not 'fixed' or 'full' error."
+            (is (= "should be either fixed or full, received: 1200"
+                   (-> (mt/user-http-request :rasta :put 400 (str "dashboard/" (u/the-id dashboard)) {:width 1200})
+                       :specific-errors
+                       :width
+                       first)))))))))
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
 ;;; |                                    UPDATING DASHBOARD CARD IN DASHCARD                                         |
@@ -2027,7 +2049,7 @@
       (mt/with-actions-test-data
         (doseq [enable-actions? [true false]
                 encrypt-db?     [true false]]
-          (mt/with-temp-env-var-value [mb-encryption-secret-key encrypt-db?]
+          (mt/with-temp-env-var-value! [mb-encryption-secret-key encrypt-db?]
             (mt/with-temp-vals-in-db Database (mt/id) {:settings {:database-enable-actions enable-actions?}}
               (mt/with-actions [{:keys [action-id]} {:type :query :visualization_settings {:hello true}}]
                 (mt/with-temp [Dashboard     {dashboard-id :id} {}
@@ -2518,34 +2540,34 @@
                      form))
                  x))
 
-(deftest dashcard->query-hashes-test
+(deftest ^:parallel dashcard->query-hashes-test
   (doseq [[dashcard expected]
           [[{:card {:dataset_query {:database 1}}}
             ["k9Y1XOETkQ31kX+S9DXW/cbDPGF7v4uS5f6dZsXjMRs="
-             "K6A0F7tRxQ+2xa33kigBwIvUvU+F95UUccWjGTx8kuI="]]
+             "I6mv3dlN4xat/6R+KQVTLDqNe8/B0oymcDnW/aKppwY="]]
 
            [{:card   {:dataset_query {:database 2}}
              :series [{:dataset_query {:database 3}}
                       {:dataset_query {:database 4}}]}
             ["WbWqdd3zu9zvVCVWh8X9ASWLqtaB1rZlU0gKLEuCK0I="
-             "NzgQC4fjR52npCkZV7IiZDb9NfcmKbWHP4krFzkLPyA="
+             "ysJFZA3Gd0vKIlrZWJDYBLCIQBf10X6QjuFtV/8QzbE="
              "pjdBPUgWnbVvMf0VsETyeB6smRC8SYejyTZIVPh2m3I="
-             "dEXUTWQI2L0Z/Bvrb2LTVVPl2Qg/56hKIPb+I2a4mG8="
+             "wf9reZSm1Pz+WDHRYtZXmfQ39U+17mq7u28MqPR8fQI="
              "rP5XFvxpRDCPXeM0A2Z7uoUkH0zwV0Z0o22obH3c1Uk="
-             "Wn9nubTcKZX5862pHFaibkqqbsqAfGa3gVhN3D4FrJw="]]]]
+             "r+C7dsdRXBN32GK+QHLA/n9pr1hzjteFzDCVezLzImQ="]]]]
     (testing (pr-str dashcard)
       (is (= expected
              (base-64-encode-byte-arrays (#'api.dashboard/dashcard->query-hashes dashcard)))))))
 
-(deftest dashcards->query-hashes-test
+(deftest ^:parallel dashcards->query-hashes-test
   (is (= ["k9Y1XOETkQ31kX+S9DXW/cbDPGF7v4uS5f6dZsXjMRs="
-          "K6A0F7tRxQ+2xa33kigBwIvUvU+F95UUccWjGTx8kuI="
+          "I6mv3dlN4xat/6R+KQVTLDqNe8/B0oymcDnW/aKppwY="
           "WbWqdd3zu9zvVCVWh8X9ASWLqtaB1rZlU0gKLEuCK0I="
-          "NzgQC4fjR52npCkZV7IiZDb9NfcmKbWHP4krFzkLPyA="
+          "ysJFZA3Gd0vKIlrZWJDYBLCIQBf10X6QjuFtV/8QzbE="
           "pjdBPUgWnbVvMf0VsETyeB6smRC8SYejyTZIVPh2m3I="
-          "dEXUTWQI2L0Z/Bvrb2LTVVPl2Qg/56hKIPb+I2a4mG8="
+          "wf9reZSm1Pz+WDHRYtZXmfQ39U+17mq7u28MqPR8fQI="
           "rP5XFvxpRDCPXeM0A2Z7uoUkH0zwV0Z0o22obH3c1Uk="
-          "Wn9nubTcKZX5862pHFaibkqqbsqAfGa3gVhN3D4FrJw="]
+          "r+C7dsdRXBN32GK+QHLA/n9pr1hzjteFzDCVezLzImQ="]
          (base-64-encode-byte-arrays
            (#'api.dashboard/dashcards->query-hashes
             [{:card {:dataset_query {:database 1}}}
@@ -2814,7 +2836,7 @@
           ;; HACK: we currently 403 on chain-filter calls that require running a MBQL
           ;; but 200 on calls that we could just use the cache.
           ;; It's not ideal and we definitely need to have a consistent behavior
-          (with-redefs [field-values/field-should-have-field-values? (fn [_] false)]
+          (with-redefs [chain-filter/use-cached-field-values? (fn [_] false)]
             (is (= {:values          [["African"] ["American"] ["Artisan"]]
                     :has_more_values false}
                    (->> (chain-filter-values-url (:id dashboard) (:category-name param-keys))
@@ -2830,6 +2852,23 @@
                  (->> (chain-filter-values-url (:id dashboard) (:category-name param-keys))
                       (mt/user-http-request :rasta :get 200)
                       (chain-filter-test/take-n-values 3)))))))))
+
+(deftest block-data-should-not-expose-field-values
+  (testing "block data perms should not allow access to field values (private#196)"
+    (when config/ee-available?
+      (mt/with-premium-features #{:advanced-permissions}
+        (mt/with-temp-copy-of-db
+          (with-chain-filter-fixtures [{:keys [dashboard param-keys]}]
+            (perms/revoke-data-perms! (perms-group/all-users) (mt/id))
+            (perms/update-data-perms-graph! [(:id (perms-group/all-users)) (mt/id) :data]
+                                            {:schemas :block})
+            (is (= "You don't have permissions to do that."
+                   (->> (chain-filter-values-url (:id dashboard) (:category-name param-keys))
+                        (mt/user-http-request :rasta :get 403))))
+            (testing "search"
+              (is (= "You don't have permissions to do that."
+                     (->> (chain-filter-search-url (:id dashboard) (:category-name param-keys) "BBQ")
+                          (mt/user-http-request :rasta :get 403)))))))))))
 
 (deftest dashboard-with-static-list-parameters-test
   (testing "A dashboard that has parameters that has static values"
@@ -4048,3 +4087,31 @@
             (testing "We have values and they all match the expression concatenation"
               (is (pos? (count values)))
               (is (every? (partial re-matches #"[^🦜]+🦜🦜🦜[^🦜]+") (map first values))))))))))
+
+(deftest param-values-permissions-test
+  (testing "Users without permissions should not see all options in a dashboard filter (private#196)"
+    (when config/ee-available?
+      (mt/with-premium-features #{:advanced-permissions}
+        (mt/with-temp-copy-of-db
+          (with-chain-filter-fixtures [{:keys [dashboard param-keys]}]
+            (testing "Return values with access"
+              (is (=? {:values (comp #(contains? % ["African"]) set)}
+                      (mt/user-http-request :rasta :get 200
+                                            (str "dashboard/" (:id dashboard) "/params/" (:category-name param-keys) "/values")))))
+            (testing "Return values with no self-service (#26874)"
+              (perms/revoke-data-perms! (perms-group/all-users) (mt/id))
+              (is (=? {:values (comp #(contains? % ["African"]) set)}
+                      (mt/user-http-request :rasta :get 200
+                                            (str "dashboard/" (:id dashboard) "/params/" (:category-name param-keys) "/values")))))
+            (testing "Return values for admin"
+              (perms/update-data-perms-graph! [(:id (perms-group/all-users)) (mt/id) :data]
+                                              {:schemas :block})
+              (is (=? {:values (comp #(contains? % ["African"]) set)}
+                      (mt/user-http-request :crowberto :get 200
+                                            (str "dashboard/" (:id dashboard) "/params/" (:category-name param-keys) "/values")))))
+            (testing "Don't return with block perms."
+              (perms/update-data-perms-graph! [(:id (perms-group/all-users)) (mt/id) :data]
+                                              {:schemas :block})
+              (is (= "You don't have permissions to do that."
+                     (mt/user-http-request :rasta :get 403
+                                           (str "dashboard/" (:id dashboard) "/params/" (:category-name param-keys) "/values")))))))))))

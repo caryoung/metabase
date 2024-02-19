@@ -3,10 +3,11 @@ import type { ColorName } from "metabase/lib/colors/types";
 import type { UserId } from "./user";
 import type { CardDisplayType } from "./card";
 import type { DatabaseId } from "./database";
+import type { TableId } from "./table";
 
 export type RegularCollectionId = number;
 
-export type CollectionId = RegularCollectionId | "root" | "personal";
+export type CollectionId = RegularCollectionId | "root" | "personal" | "users";
 
 export type CollectionContentModel = "card" | "dataset";
 
@@ -77,6 +78,7 @@ export interface CollectionItem {
   collection_position?: number | null;
   collection_preview?: boolean | null;
   fully_parameterized?: boolean | null;
+  based_on_upload?: TableId | null; // only for models
   collection?: Collection | null;
   display?: CardDisplayType;
   personal_owner_id?: UserId;
@@ -95,5 +97,7 @@ export interface CollectionItem {
 export interface CollectionListQuery {
   archived?: boolean;
   "exclude-other-user-collections"?: boolean;
+  "exclude-archived"?: boolean;
   namespace?: string;
+  tree?: boolean;
 }

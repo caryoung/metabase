@@ -1,8 +1,10 @@
 import type {
   DatasetColumn,
+  DatabaseId,
   FieldId,
   FieldValuesType,
   RowValue,
+  TableId,
 } from "metabase-types/api";
 import type {
   BOOLEAN_FILTER_OPERATORS,
@@ -133,8 +135,11 @@ type TableInlineDisplayInfo = Pick<
 
 export type ColumnDisplayInfo = {
   name: string;
+  description?: string;
   displayName: string;
   longDisplayName: string;
+  semanticType: string | null;
+  effectiveType: string;
 
   isCalculated: boolean;
   isFromJoin: boolean;
@@ -142,11 +147,50 @@ export type ColumnDisplayInfo = {
   isAggregation: boolean;
   isBreakout: boolean;
   table?: TableInlineDisplayInfo;
+  fingerprint?: FingerprintDisplayInfo;
 
   breakoutPosition?: number;
   filterPositions?: number[];
   orderByPosition?: number;
   selected?: boolean; // used in aggregation and field clauses
+};
+
+export type FingerprintDisplayInfo = {
+  global?: FingerprintGlobalDisplayInfo;
+  type?: FingerprintTypeDisplayInfo;
+};
+
+export type FingerprintGlobalDisplayInfo = {
+  distinctCount?: number;
+  "nil%"?: number;
+};
+
+export type FingerprintTypeDisplayInfo = {
+  "type/Text"?: TextFingerprintDisplayInfo;
+  "type/Number"?: NumberFingerprintDisplayInfo;
+  "type/DateTime"?: DateTimeFingerprintDisplayInfo;
+};
+
+export type TextFingerprintDisplayInfo = {
+  averageLength: number;
+  percentEmail: number;
+  percentJson: number;
+  percentState: number;
+  percentUrl: number;
+};
+
+export type NumberFingerprintDisplayInfo = {
+  avg: number;
+  max: number;
+  min: number;
+  q1: number;
+  q3: number;
+  sd: number;
+};
+
+export type DateTimeFingerprintDisplayInfo = {
+  earliest: string;
+  latest: string;
 };
 
 export type ColumnGroupDisplayInfo = TableDisplayInfo & {
@@ -515,3 +559,25 @@ export type QueryDisplayInfo = {
   isNative: boolean;
   isEditable: boolean;
 };
+
+export type DatabaseItem = {
+  type: "database";
+  id: DatabaseId;
+};
+
+export type SchemaItem = {
+  type: "schema";
+  id: DatabaseId;
+};
+
+export type TableItem = {
+  type: "table";
+  id: TableId;
+};
+
+export type FieldItem = {
+  type: "field";
+  id: FieldId;
+};
+
+export type DependentItem = DatabaseItem | SchemaItem | TableItem | FieldItem;

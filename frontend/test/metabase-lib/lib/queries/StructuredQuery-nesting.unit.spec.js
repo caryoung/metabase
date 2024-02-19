@@ -67,56 +67,6 @@ describe("StructuredQuery nesting", () => {
         },
       });
     });
-
-    it("should return a table with correct dimensions", () => {
-      const { ordersTable } = setup();
-      const q = ordersTable
-        .legacyQuery()
-        .aggregate(["count"])
-        .breakout(["field", ORDERS.PRODUCT_ID, null]);
-      expect(
-        q
-          .nest()
-          .filterDimensionOptions()
-          .dimensions.map(d => d.mbql()),
-      ).toEqual([
-        ["field", "PRODUCT_ID", { "base-type": "type/Integer" }],
-        ["field", "count", { "base-type": "type/Integer" }],
-      ]);
-    });
-  });
-
-  describe("topLevelQuery", () => {
-    it("should return the query if it's summarized", () => {
-      const { ordersTable } = setup();
-      const q = ordersTable.legacyQuery();
-      expect(q.topLevelQuery().legacyQuery()).toEqual({
-        "source-table": ORDERS_ID,
-      });
-    });
-    it("should return the query if it's not summarized", () => {
-      const { ordersTable } = setup();
-      const q = ordersTable.legacyQuery().aggregate(["count"]);
-      expect(q.topLevelQuery().legacyQuery()).toEqual({
-        "source-table": ORDERS_ID,
-        aggregation: [["count"]],
-      });
-    });
-    it("should return last stage if none are summarized", () => {
-      const { ordersTable } = setup();
-      const q = ordersTable.legacyQuery().nest();
-      expect(q.topLevelQuery().legacyQuery()).toEqual({
-        "source-query": { "source-table": ORDERS_ID },
-      });
-    });
-    it("should return last summarized stage if any is summarized", () => {
-      const { ordersTable } = setup();
-      const q = ordersTable.legacyQuery().aggregate(["count"]).nest();
-      expect(q.topLevelQuery().legacyQuery()).toEqual({
-        "source-table": ORDERS_ID,
-        aggregation: [["count"]],
-      });
-    });
   });
 
   describe("model question", () => {
@@ -139,7 +89,7 @@ describe("StructuredQuery nesting", () => {
 
       const metadata = ordersTable.metadata;
       const question = ordersTable.question();
-      const dataset = question.setId(1).setDataset(true);
+      const dataset = question.setId(1).setType("model");
       const nestedDatasetQuery = dataset
         .composeDataset()
         .legacyQuery({ useStructuredQuery: true });

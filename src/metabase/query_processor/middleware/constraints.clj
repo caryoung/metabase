@@ -43,15 +43,6 @@
   :database-local :allowed
   :audit          :getter)
 
-(defn query->max-rows
-  "Given a query, returns the max rows that should be returned *as defined by settings*. In other words,
-  return `(aggregated-query-row-limit)` or `(unaggregated-query-row-limit)` depending on whether the query is
-  aggregated or not."
-  [{{aggregations :aggregation} :query}]
-  (if-not aggregations
-    (unaggregated-query-row-limit)
-    (aggregated-query-row-limit)))
-
 (defn default-query-constraints
   "Default map of constraints that we apply on dataset queries executed by the api."
   []
@@ -68,16 +59,18 @@
 (defn- merge-default-constraints [constraints]
   (merge (default-query-constraints) constraints))
 
-(defn- add-default-userland-constraints*
+(defn add-constraints
   "Add default values of `:max-results` and `:max-results-bare-rows` to `:constraints` map `m`."
-  [{{:keys [add-default-userland-constraints?]} :middleware, :as query}]
-  (cond-> query
-    add-default-userland-constraints? (update :constraints (comp ensure-valid-constraints merge-default-constraints))))
+  [query]
+  (update query :constraints (comp ensure-valid-constraints merge-default-constraints)))
 
-(defn add-default-userland-constraints
-  "Middleware that optionally adds default `max-results` and `max-results-bare-rows` constraints to queries, meant for
-  use with [[metabase.query-processor/process-query-and-save-with-max-results-constraints!]], which ultimately powers
-  most QP API endpoints."
-  [qp]
-  (fn [query rff context]
-    (qp (add-default-userland-constraints* query) rff context)))
+(defn- should-add-userland-constraints? [query]
+  (and (get-in query [:middleware :userland-query?])
+       (get-in query [:middleware :add-default-userland-constraints?])))
+
+(defn maybe-add-default-userland-constraints
+  "If the query is marked as requiring userland constraints, actually calculate the constraints and add them to the
+  query."
+  [query]
+  (cond-> query
+    (should-add-userland-constraints? query) add-constraints))

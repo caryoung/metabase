@@ -120,10 +120,10 @@
   [a-query]
   (lib.core/drop-stage a-query))
 
-(defn ^:export drop-stage-if-empty
+(defn ^:export drop-empty-stages
   "Drops the final stage in the pipeline IF the stage is empty of clauses, otherwise no-op"
   [a-query]
-  (lib.core/drop-stage-if-empty a-query))
+  (lib.core/drop-empty-stages a-query))
 
 (defn ^:export orderable-columns
   "Return a sequence of Column metadatas about the columns you can add order bys for in a given stage of `a-query.` To
@@ -467,10 +467,10 @@
    a `column`.
    For aggregations requiring an argument `column` is mandatory, otherwise
    it is optional."
-  ([aggregation-operator]
-   (lib.core/aggregation-clause aggregation-operator))
-  ([aggregation-operator column]
-   (lib.core/aggregation-clause aggregation-operator column)))
+  [aggregation-operator column]
+  (if (undefined? column)
+    (lib.core/aggregation-clause aggregation-operator)
+    (lib.core/aggregation-clause aggregation-operator column)))
 
 (defn ^:export available-aggregation-operators
   "Get the available aggregation operators for the stage with `stage-number` of
@@ -663,7 +663,7 @@
 
 (defn- normalize-legacy-ref
   [a-ref]
-  (if (#{:metric :segment} (first a-ref))
+  (if (#{:aggregation :metric :segment} (first a-ref))
     (subvec a-ref 0 2)
     (update a-ref 2 update-vals #(if (qualified-keyword? %)
                                    (u/qualified-name %)
@@ -673,12 +673,13 @@
   "Given a column, metric or segment metadata from eg. [[fieldable-columns]] or [[available-segments]],
   return it as a legacy JSON field ref.
   For compatibility reasons, segment and metric references are always returned without options."
-  [column]
-  (-> column
-      lib.core/ref
-      lib.convert/->legacy-MBQL
-      normalize-legacy-ref
-      clj->js))
+  [a-query stage-number column]
+  (lib.convert/with-aggregation-list (:aggregation (lib.util/query-stage a-query stage-number))
+    (-> column
+        lib.core/ref
+        lib.convert/->legacy-MBQL
+        normalize-legacy-ref
+        clj->js)))
 
 (defn- legacy-ref->pMBQL [a-legacy-ref]
   (-> a-legacy-ref
@@ -1248,3 +1249,14 @@
   "Given two CLJS `:metadata/columns` returns true if `src-column` is a valid source to use for filtering `dst-column`."
   [src-column dst-column]
   (lib.types.isa/valid-filter-for? src-column dst-column))
+
+(defn ^:export dependent-metadata
+  "Return the IDs and types of entities the metadata about is required
+  for the FE to function properly."
+  [a-query]
+  (to-array (map clj->js (lib.core/dependent-metadata a-query))))
+
+(defn ^:export can-run
+  "Returns true if the query is runnable."
+  [a-query]
+  (lib.core/can-run a-query))

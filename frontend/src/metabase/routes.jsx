@@ -23,9 +23,8 @@ import { DashboardAppConnected } from "metabase/dashboard/containers/DashboardAp
 import { AutomaticDashboardAppConnected } from "metabase/dashboard/containers/AutomaticDashboardApp";
 
 /* Browse data */
-import BrowseApp from "metabase/browse/components/BrowseApp";
-import DatabaseBrowser from "metabase/browse/containers/DatabaseBrowser";
-import SchemaBrowser from "metabase/browse/containers/SchemaBrowser";
+import { BrowseApp } from "metabase/browse/components/BrowseApp";
+import SchemaBrowser from "metabase/browse/components/SchemaBrowser";
 import TableBrowser from "metabase/browse/containers/TableBrowser";
 
 import QueryBuilder from "metabase/query_builder/containers/QueryBuilder";
@@ -84,6 +83,7 @@ import CollectionLanding from "metabase/collections/components/CollectionLanding
 import { ArchiveApp } from "metabase/archive/containers/ArchiveApp";
 import SearchApp from "metabase/search/containers/SearchApp";
 import { trackPageView } from "metabase/lib/analytics";
+import { BrowseRedirect } from "./browse/components/BrowseRedirect";
 import {
   CanAccessMetabot,
   CanAccessSettings,
@@ -152,7 +152,10 @@ export const getRoutes = store => {
             onEnter={(nextState, replace) => {
               const page = PLUGIN_LANDING_PAGE[0] && PLUGIN_LANDING_PAGE[0]();
               if (page && page !== "/") {
-                replace(page[0] === "/" ? page : `/${page}`);
+                replace({
+                  pathname: page[0] === "/" ? page : `/${page}`,
+                  state: { preserveNavbarState: true },
+                });
               }
             }}
           />
@@ -205,7 +208,6 @@ export const getRoutes = store => {
               title={t`New Model`}
               component={NewModelOptions}
             />
-            <Route path="notebook" component={QueryBuilder} />
             <Route path=":slug" component={QueryBuilder} />
             <Route path=":slug/notebook" component={QueryBuilder} />
             <Route path=":slug/query" component={QueryBuilder} />
@@ -216,10 +218,36 @@ export const getRoutes = store => {
             <Route path="metabot" component={QueryBuilder} />
           </Route>
 
-          <Route path="browse" component={BrowseApp}>
-            <IndexRoute component={DatabaseBrowser} />
-            <Route path=":slug" component={SchemaBrowser} />
-            <Route path=":dbId/schema/:schemaName" component={TableBrowser} />
+          <Route path="browse">
+            <IndexRoute component={BrowseRedirect} />
+            <Route path="models" component={() => <BrowseApp tab="models" />} />
+            <Route
+              path="databases"
+              component={() => <BrowseApp tab="databases" />}
+            />
+            <Route
+              path="databases/:slug"
+              component={({ params }) => (
+                <BrowseApp tab="databases">
+                  <SchemaBrowser params={params} />
+                </BrowseApp>
+              )}
+            />
+            <Route
+              path="databases/:dbId/schema/:schemaName"
+              component={({ params }) => (
+                <BrowseApp tab="databases">
+                  <TableBrowser params={params} />
+                </BrowseApp>
+              )}
+            />
+
+            {/* These two Redirects support legacy paths in v48 and earlier */}
+            <Redirect from=":dbId-:slug" to="databases/:dbId-:slug" />
+            <Redirect
+              from=":dbId/schema/:schemaName"
+              to="databases/:dbId/schema/:schemaName"
+            />
           </Route>
 
           {/* INDIVIDUAL DASHBOARDS */}

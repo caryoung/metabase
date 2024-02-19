@@ -7,6 +7,18 @@ export function popover() {
   return cy.get(POPOVER_ELEMENT);
 }
 
+export function mantinePopover() {
+  const MANTINE_POPOVER = "[data-popover=mantine-popover]";
+  return cy.get(MANTINE_POPOVER).should("be.visible");
+}
+
+const HOVERCARD_ELEMENT = ".emotion-HoverCard-dropdown[role='dialog']";
+
+export function hovercard() {
+  cy.get(HOVERCARD_ELEMENT).should("be.visible");
+  return cy.get(HOVERCARD_ELEMENT);
+}
+
 export function main() {
   return cy.get("main");
 }
@@ -34,7 +46,7 @@ export function leftSidebar() {
 }
 
 export function navigationSidebar() {
-  return cy.get("#root aside").first();
+  return cy.findByTestId("main-navbar-root");
 }
 
 export function appBar() {
@@ -79,6 +91,37 @@ export function filterWidget() {
 
 export function clearFilterWidget(index = 0) {
   return filterWidget().eq(index).icon("close").click();
+}
+
+export function resetFilterWidgetToDefault(index = 0) {
+  return filterWidget().eq(index).icon("refresh").click();
+}
+
+export function setFilterWidgetValue(
+  value,
+  targetPlaceholder,
+  { buttonLabel = "Update filter" } = {},
+) {
+  filterWidget().eq(0).click();
+  popover().within(() => {
+    cy.icon("close").click();
+    if (value) {
+      cy.findByPlaceholderText(targetPlaceholder).type(value).blur();
+    }
+    cy.button(buttonLabel).click();
+  });
+}
+
+export function toggleFilterWidgetValues(
+  values = [],
+  { buttonLabel = "Add filter" } = {},
+) {
+  filterWidget().eq(0).click();
+
+  popover().within(() => {
+    values.forEach(value => cy.findByText(value).click());
+    cy.button(buttonLabel).click();
+  });
 }
 
 export const openQuestionActions = () => {

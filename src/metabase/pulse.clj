@@ -68,7 +68,7 @@
   (try
     (let [card-id (u/the-id card-or-id)
           card    (t2/select-one :model/Card :id card-id)
-          result  (qp.dashboard/run-query-for-dashcard-async
+          result  (qp.dashboard/process-query-for-dashcard
                    :dashboard-id  (u/the-id dashboard)
                    :card-id       card-id
                    :dashcard-id   (u/the-id dashcard)
@@ -77,10 +77,9 @@
                    :parameters    parameters
                    :middleware    {:process-viz-settings? true
                                    :js-int-to-string?     false}
-                   :run           (fn [query info]
-                                    (qp/process-query-and-save-with-max-results-constraints!
-                                     (assoc query :async? false)
-                                     info)))]
+                   :run           (^:once fn* [query info]
+                                   (qp/process-query
+                                    (qp/userland-query-with-default-constraints query info))))]
       (when-not (and (get-in dashcard [:visualization_settings :card.hide_empty]) (is-card-empty? result))
         {:card     card
          :dashcard dashcard
@@ -92,7 +91,7 @@
 (defn virtual-card-of-type?
   "Check if dashcard is a virtual with type `ttype`, if `true` returns the dashcard, else returns `nil`.
 
-  There are currently 3 types of virtual card: \"text\", \"action\", \"link\"."
+  There are currently 4 types of virtual card: \"text\", \"action\", \"link\", \"placeholder\"."
   [dashcard ttype]
   (when (= ttype (get-in dashcard [:visualization_settings :virtual_card :display]))
     dashcard))
@@ -142,7 +141,10 @@
 (defn- escape-heading-markdown
   [dashcard]
   (if (= "heading" (get-in dashcard [:visualization_settings :virtual_card :display]))
-    (update-in dashcard [:visualization_settings :text] #(str "## " (shared.params/escape-chars % shared.params/escaped-chars-regex)))
+    ;; If there's no heading text, the heading is empty, so we return nil.
+    (when (get-in dashcard [:visualization_settings :text])
+      (update-in dashcard [:visualization_settings :text]
+                 #(str "## " (shared.params/escape-chars % shared.params/escaped-chars-regex))))
     dashcard))
 
 (defn- dashcard->part
@@ -164,15 +166,19 @@
     (virtual-card-of-type? dashcard "link")
     (dashcard-link-card->part dashcard)
 
+    ;; placeholder cards aren't displayed
+    (virtual-card-of-type? dashcard "placeholder")
+    nil
+
     ;; text cards have existed for a while and I'm not sure if all existing text cards
     ;; will have virtual_card.display = "text", so assume everything else is a text card
     :else
     (let [parameters (merge-default-values (pulse-params/parameters pulse dashboard))]
-      (-> dashcard
-          (pulse-params/process-virtual-dashcard parameters)
-          escape-heading-markdown
-          :visualization_settings
-          (assoc :type :text)))))
+      (some-> dashcard
+              (pulse-params/process-virtual-dashcard parameters)
+              escape-heading-markdown
+              :visualization_settings
+              (assoc :type :text)))))
 
 (defn- dashcards->part
   [dashcards pulse dashboard]
@@ -425,7 +431,7 @@
                                                          (some? (:id recipient)))) recipients)
         non-user-recipients (filter (fn [recipient] (and (u/email? (:email recipient))
                                                          (nil? (:id recipient)))) recipients)
-        timezone            (->> parts (some :card) defaulted-timezone)
+        timezone            (some->> parts (some :card) defaulted-timezone)
         dashboard           (update (t2/select-one Dashboard :id dashboard-id) :description markdown/process-markdown :html)
         email-to-users      (when (> (count user-recipients) 0)
                               (construct-pulse-email (subject pulse) (mapv :email user-recipients) (messages/render-pulse-email timezone pulse dashboard parts nil)))
@@ -480,7 +486,7 @@
                       (create-slack-attachment-data parts))})
 
 (defmethod notification :default
-  [_ _ {:keys [channel_type]}]
+  [_alert-or-pulse _parts {:keys [channel_type], :as _channel}]
   (throw (UnsupportedOperationException. (tru "Unrecognized channel type {0}" (pr-str channel_type)))))
 
 (defn- parts->notifications [{:keys [channels channel-ids] pulse-id :id :as pulse} parts]
@@ -568,8 +574,9 @@
   the Pulse.
 
    Example:
-       (send-pulse! pulse)                       Send to all Channels
-       (send-pulse! pulse :channel-ids [312])    Send only to Channel with :id = 312"
+
+    (send-pulse! pulse)                    ; Send to all Channels
+    (send-pulse! pulse :channel-ids [312]) ; Send only to Channel with :id = 312"
   [{:keys [dashboard_id], :as pulse} & {:keys [channel-ids]}]
   {:pre [(map? pulse) (integer? (:creator_id pulse))]}
   (let [dashboard (t2/select-one Dashboard :id dashboard_id)

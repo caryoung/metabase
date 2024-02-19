@@ -14,7 +14,7 @@ import type {
 } from "./types";
 
 export function fromLegacyQuery(
-  databaseId: DatabaseId,
+  databaseId: DatabaseId | null,
   metadata: MetadataProvider | LegacyMetadata,
   datasetQuery: DatasetQuery,
 ): Query {
@@ -60,18 +60,8 @@ export function dropStage(query: Query, stageIndex: number): Query {
   return ML.drop_stage(query, stageIndex);
 }
 
-export function dropStageIfEmpty(query: Query, stageIndex: number): Query {
-  return ML.drop_stage_if_empty(query, stageIndex);
-}
-
 export function dropEmptyStages(query: Query): Query {
-  const stageIndexes = Array.from({ length: stageCount(query) }).map(
-    (_, index) => index,
-  );
-
-  return stageIndexes.reduceRight((query, stageIndex) => {
-    return dropStageIfEmpty(query, stageIndex);
-  }, query);
+  return ML.drop_empty_stages(query);
 }
 
 export function removeClause(
@@ -93,4 +83,8 @@ export function replaceClause(
 
 export function sourceTableOrCardId(query: Query): TableId | null {
   return ML.source_table_or_card_id(query);
+}
+
+export function canRun(query: Query): boolean {
+  return ML.can_run(query);
 }

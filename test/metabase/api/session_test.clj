@@ -269,12 +269,12 @@
 
 (deftest forgot-password-throttling-test
   (reset-throttlers!)
-  (testing "Test that email based throttling kicks in after the login failure threshold (10) has been reached"
+  (testing "Test that email based throttling kicks in after the login failure threshold (3) has been reached"
     (letfn [(send-password-reset! [& [expected-status & _more]]
               (mt/client :post (or expected-status 204) "session/forgot_password" {:email "not-found@metabase.com"}))]
       (with-redefs [api.session/forgot-password-throttlers (cleaned-throttlers #'api.session/forgot-password-throttlers
                                                                                [:email :ip-address])]
-        (dotimes [_ 10]
+        (dotimes [_ 3]
           (send-password-reset!))
         (let [error (fn []
                       (-> (send-password-reset! 400)
@@ -388,23 +388,23 @@
 (deftest reset-token-ttl-hours-test
   (testing "Test reset-token-ttl-hours-test"
     (testing "reset-token-ttl-hours-test is reset to default when not set"
-      (mt/with-temp-env-var-value [mb-reset-token-ttl-hours nil]
+      (mt/with-temp-env-var-value! [mb-reset-token-ttl-hours nil]
         (is (= 48 (setting/get-value-of-type :integer :reset-token-ttl-hours)))))
 
     (testing "reset-token-ttl-hours-test is set to positive value"
-      (mt/with-temp-env-var-value [mb-reset-token-ttl-hours 36]
+      (mt/with-temp-env-var-value! [mb-reset-token-ttl-hours 36]
         (is (= 36 (setting/get-value-of-type :integer :reset-token-ttl-hours)))))
 
     (testing "reset-token-ttl-hours-test is set to large positive value"
-      (mt/with-temp-env-var-value [mb-reset-token-ttl-hours (+ Integer/MAX_VALUE 1)]
+      (mt/with-temp-env-var-value! [mb-reset-token-ttl-hours (+ Integer/MAX_VALUE 1)]
         (is (= (+ Integer/MAX_VALUE 1) (setting/get-value-of-type :integer :reset-token-ttl-hours)))))
 
     (testing "reset-token-ttl-hours-test is set to zero"
-      (mt/with-temp-env-var-value [mb-reset-token-ttl-hours 0]
+      (mt/with-temp-env-var-value! [mb-reset-token-ttl-hours 0]
         (is (= 0 (setting/get-value-of-type :integer :reset-token-ttl-hours)))))
 
     (testing "reset-token-ttl-hours-test is set to negative value"
-      (mt/with-temp-env-var-value [mb-reset-token-ttl-hours -1]
+      (mt/with-temp-env-var-value! [mb-reset-token-ttl-hours -1]
         (is (= -1 (setting/get-value-of-type :integer :reset-token-ttl-hours)))))))
 
 (deftest properties-test
@@ -568,6 +568,22 @@
              (#'api.session/login (:email user) "password" device-info)))))))
 
 ;;; ------------------------------------------- TESTS FOR UNSUBSCRIBING NONUSERS STUFF --------------------------------------------
+
+(deftest unsubscribe-hash-test
+  (mt/with-temporary-setting-values [site-uuid-for-unsubscribing-url "08534993-94c6-4bac-a1ad-86c9668ee8f5"]
+    (let [email         "rasta@pasta.com"
+          pulse-id      12345678
+          expected-hash "37bc76b4a24279eb90a71c129a629fb8626ad0089f119d6d095bc5135377f2e2884ad80b037495f1962a283cf57cdbad031fd1f06a21d86a40bba7fe674802dd"]
+      (testing "We generate a cryptographic hash to validate unsubscribe URLs"
+        (is (= expected-hash (messages/generate-pulse-unsubscribe-hash pulse-id email))))
+
+      (testing "The hash value depends on the pulse-id, email, and site-uuid"
+        (let [alternate-site-uuid "aa147515-ade9-4298-ac5f-c7e42b69286d"
+              alternate-hashes    [(messages/generate-pulse-unsubscribe-hash 87654321 email)
+                                   (messages/generate-pulse-unsubscribe-hash pulse-id "hasta@lavista.com")
+                                   (mt/with-temporary-setting-values [site-uuid-for-unsubscribing-url alternate-site-uuid]
+                                     (messages/generate-pulse-unsubscribe-hash pulse-id email))]]
+          (is (= 3 (count (distinct (remove #{expected-hash} alternate-hashes))))))))))
 
 (deftest unsubscribe-test
   (reset-throttlers!)
